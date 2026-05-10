@@ -1,38 +1,125 @@
 # SHL Assessment Recommender: Technical Approach
 
-## 1. System Architecture
-The system is built with a **modular, deterministic orchestration** architecture using FastAPI. It avoids complex autonomous agents in favor of a predictable pipeline:
-- **API Layer**: FastAPI with strict Pydantic validation.
-- **Orchestration**: A centralized controller that manages intent detection, retrieval gating, and grounded response generation.
-- **Storage**: JSON-based catalog with FAISS vector indices and TF-IDF sparse matrices.
+Approach Document
+System Design
 
-## 2. Retrieval Strategy
-To achieve high **Recall@10**, we use a **Hybrid Retrieval** system:
-- **Dense Retrieval**: `sentence-transformers/all-MiniLM-L6-v2` for semantic intent matching.
-- **Sparse Retrieval**: `TF-IDF` for exact matches on product names (e.g., "OPQ32") and specific skill keywords.
-- **Rank Fusion**: Reciprocal Rank Fusion (RRF) merges results to surface the best candidates from both worlds.
+The system is designed as a production-oriented conversational recommender for SHL assessments using a Retrieval-Augmented Generation (RAG) architecture. The backend is implemented using FastAPI with a modular structure separating ingestion, retrieval, orchestration, evaluation, and API layers.
 
-## 3. Conversation Orchestration
-The orchestrator follows a **"Clarify Before Recommend"** strategy:
-- **Analyzer**: Extracts hiring signals (role, seniority, skills) using LLM-assisted JSON parsing.
-- **Decision Engine**: Blocks recommendations if requirements are insufficient, triggering targeted clarifying questions.
-- **Refinement**: Preserves state by augmenting retrieval queries with historical context.
+The workflow consists of:
 
-## 4. Hallucination Prevention
-Grounding is enforced at multiple layers:
-- **Ingestion**: Strict filtering of non-assessment products.
-- **Retrieval**: Only verified catalog entries enter the context window.
-- **Validation**: Post-generation schema validation ensures URLs and counts are accurate.
-- **Negative Constraint**: System prompts strictly prohibit inventing assessments or URLs.
+Catalog Ingestion
+SHL assessment catalog pages are scraped and normalized into structured documents.
+Only Individual Test Solutions are retained. Bundled or unrelated offerings are filtered during ingestion.
+Metadata such as assessment category, description, keywords, duration, and URLs are preserved for retrieval and grounding.
+Retrieval Layer
+Dense semantic retrieval using SentenceTransformers (all-MiniLM-L6-v2) with FAISS.
+Sparse keyword retrieval using TF-IDF.
+Reciprocal Rank Fusion (RRF) combines both retrieval methods to improve Recall@10 and exact-skill matching.
+Conversational Orchestration
+A deterministic orchestration layer analyzes intent, determines whether clarification is needed, performs retrieval, and generates grounded responses.
+The system avoids autonomous agent loops to reduce hallucination risk and improve evaluation consistency.
+Validation & Guardrails
+Prompt injection detection, schema validation, retrieval validation, and refusal handling are applied before responses are returned.
+Retrieval Setup
 
-## 5. Evaluation & Hardening
-- **Heuristic Guardrails**: Detects prompt injection and jailbreak patterns without expensive moderation APIs.
-- **Caching**: In-memory query caching reduces latency for repeated refinements.
-- **Resilience**: 15s LLM timeouts and graceful fallbacks prevent cascading failures during evaluation.
+A hybrid retrieval setup was chosen because semantic-only retrieval struggled with recruiter-style keyword queries such as:
 
-## 6. Tradeoffs
-- **LLM vs Rules**: We used LLM for intent/extraction but rules for routing and filtering to ensure explainability and speed.
-- **Lightweight Embeddings**: Chose `all-MiniLM-L6-v2` over larger models to keep local inference under 1 second.
+“Java backend developer”
+“numerical reasoning”
+“leadership hiring”
 
-## 7. AI Tooling Disclosure
-Developed using **Antigravity** (Google Deepmind AI assistant) for scaffolding and implementation support. All business logic and orchestration patterns were engineered for production-grade robustness.
+Dense embeddings handled semantic intent well but occasionally missed exact assessment names or technical skill matches. Sparse TF-IDF retrieval improved precision for exact terminology and recruiter-specific keywords.
+
+Final retrieval flow:
+
+Query embedding generation
+FAISS semantic search
+TF-IDF keyword search
+Reciprocal Rank Fusion (RRF)
+Deduplication and reranking
+
+Retrieval chunks were optimized to include:
+
+assessment name
+category
+measurable skills
+cleaned descriptions
+source URLs
+
+This improved both retrieval relevance and grounding quality.
+
+Prompt & Conversation Design
+
+The orchestration layer follows a clarification-first strategy.
+
+The assistant avoids immediate recommendations for vague prompts. For example:
+
+“I need an assessment” triggers clarification questions about role, seniority, and hiring goals before retrieval is executed.
+
+Conversation analysis supports:
+
+vague query detection
+refinement handling
+comparison requests
+off-topic refusal
+prompt injection detection
+
+The LLM is instructed to:
+
+only use retrieved SHL context
+never invent assessments or URLs
+refuse unsupported comparisons
+avoid non-SHL recommendations
+
+Comparison responses are grounded entirely in retrieved catalog metadata and processed descriptions.
+
+The system is fully stateless. Each request contains the complete conversation history, and no session state is stored server-side.
+
+Evaluation Approach
+
+Testing focused on:
+
+Recall@10 quality
+conversational robustness
+schema compliance
+latency
+hallucination resistance
+
+Manual evaluation scenarios included:
+
+vague recruiter prompts
+refinement conversations
+comparison requests
+prompt injection attempts
+malformed payloads
+off-topic questions
+
+Benchmark scripts were used to measure:
+
+retrieval latency
+orchestration latency
+end-to-end API response time
+
+The target response latency was under 5 seconds locally.
+
+What Did Not Work
+Pure semantic retrieval
+Produced weaker exact-skill matching and inconsistent recruiter query performance.
+Agentic orchestration
+Autonomous multi-step agents increased unpredictability and hallucination risk.
+Deterministic orchestration was more stable for evaluator-focused testing.
+Unfiltered catalog ingestion
+Including bundled SHL solutions reduced retrieval quality and occasionally surfaced out-of-scope recommendations.
+Large retrieval contexts
+Passing excessive context to the LLM increased latency and reduced response consistency.
+AI Tooling Disclosure
+
+AI-assisted coding tools were used for:
+
+project scaffolding
+boilerplate generation
+iterative implementation
+documentation drafting
+test scenario generation
+
+All retrieval logic, orchestration behavior, filtering rules, validation flows, and evaluation strategies were manually reviewed, modified, and tested during development.
